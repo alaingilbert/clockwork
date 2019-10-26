@@ -13,6 +13,7 @@ type Clock interface {
 	Sleep(d time.Duration)
 	Now() time.Time
 	Since(t time.Time) time.Duration
+	Until(t time.Time) time.Duration
 	NewTicker(d time.Duration) Ticker
 	NewTimer(d time.Duration) Timer
 	AfterFunc(d time.Duration, f func()) Timer
@@ -96,6 +97,10 @@ func (rc *realClock) Now() time.Time {
 
 func (rc *realClock) Since(t time.Time) time.Duration {
 	return rc.Now().Sub(t)
+}
+
+func (rc *realClock) Until(t time.Time) time.Duration {
+	return t.Sub(rc.Now())
 }
 
 func (rc *realClock) NewTicker(d time.Duration) Ticker {
@@ -238,6 +243,11 @@ func (fc *fakeClock) Now() time.Time {
 // Since returns the duration that has passed since the given time on the fakeClock
 func (fc *fakeClock) Since(t time.Time) time.Duration {
 	return fc.Now().Sub(t)
+}
+
+// Until returns the duration until the given time on the fakeClock
+func (fc *fakeClock) Until(t time.Time) time.Duration {
+	return t.Sub(fc.Now())
 }
 
 func (fc *fakeClock) NewTicker(d time.Duration) Ticker {

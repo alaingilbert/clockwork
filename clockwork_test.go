@@ -138,6 +138,15 @@ func TestFakeClockSince(t *testing.T) {
 	}
 }
 
+func TestFakeClockUntil(t *testing.T) {
+	fc := NewFakeClock()
+	elapsedTime := time.Second
+	future := fc.Now().Add(elapsedTime)
+	if fc.Until(future) != elapsedTime {
+		t.Fatalf("fakeClock.Until() returned unexpected duration, got: %d, want: %d", fc.Until(future), elapsedTime)
+	}
+}
+
 func TestFakeClockTimers(t *testing.T) {
 	fc := &fakeClock{}
 	zero := fc.NewTimer(0)
