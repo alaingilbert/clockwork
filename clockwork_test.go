@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestFakeClockAfter(t *testing.T) {
@@ -259,4 +261,10 @@ func TestAdvancePastAfter(t *testing.T) {
 	if start.Add(6).Sub(<-six) > 0 {
 		t.Errorf("timestamp is too early")
 	}
+}
+
+func TestLocation(t *testing.T) {
+	loc := time.FixedZone("local", -3600)
+	fc := NewFakeClockAt(time.Date(2020, 01, 16, 23, 12, 12, 0, loc))
+	assert.Equal(t, loc, fc.Location())
 }

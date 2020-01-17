@@ -17,6 +17,7 @@ type Clock interface {
 	NewTicker(d time.Duration) Ticker
 	NewTimer(d time.Duration) Timer
 	AfterFunc(d time.Duration, f func()) Timer
+	Location() *time.Location
 }
 
 // Timer provides an interface to a time.Timer which is testable.
@@ -82,6 +83,10 @@ func NewFakeClockAt(t time.Time) FakeClock {
 }
 
 type realClock struct{}
+
+func (rc *realClock) Location() *time.Location {
+	return time.Now().Location()
+}
 
 func (rc *realClock) After(d time.Duration) <-chan time.Time {
 	return time.After(d)
@@ -248,6 +253,10 @@ func (fc *fakeClock) Since(t time.Time) time.Duration {
 // Until returns the duration until the given time on the fakeClock
 func (fc *fakeClock) Until(t time.Time) time.Duration {
 	return t.Sub(fc.Now())
+}
+
+func (fc *fakeClock) Location() *time.Location {
+	return fc.time.Location()
 }
 
 func (fc *fakeClock) NewTicker(d time.Duration) Ticker {
