@@ -67,6 +67,11 @@ func NewRealClock() Clock {
 	return &realClock{}
 }
 
+// NewRealClockInLocation ...
+func NewRealClockInLocation(location *time.Location) Clock {
+	return &realClock{loc: location}
+}
+
 // NewFakeClock returns a FakeClock implementation which can be
 // manually advanced through time for testing. The initial time of the
 // FakeClock will be an arbitrary non-zero time.
@@ -82,7 +87,9 @@ func NewFakeClockAt(t time.Time) FakeClock {
 	}
 }
 
-type realClock struct{}
+type realClock struct{
+	loc *time.Location
+}
 
 func (rc *realClock) Location() *time.Location {
 	return time.Now().Location()
@@ -97,6 +104,9 @@ func (rc *realClock) Sleep(d time.Duration) {
 }
 
 func (rc *realClock) Now() time.Time {
+	if rc.loc != nil {
+		return time.Now().In(rc.loc)
+	}
 	return time.Now()
 }
 
