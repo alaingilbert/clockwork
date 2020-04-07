@@ -1,4 +1,4 @@
-module clockwork
+module github.com/alaingilbert/clockwork
 
 go 1.14
 
