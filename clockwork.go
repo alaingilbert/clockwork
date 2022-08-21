@@ -2,7 +2,6 @@ package clockwork
 
 import (
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -16,37 +15,11 @@ type Clock interface {
 	Until(t time.Time) time.Duration
 	NewTicker(d time.Duration) Ticker
 	NewTimer(d time.Duration) Timer
-	AfterFunc(d time.Duration, f func()) Timer
 	Location() *time.Location
-}
-
-// Timer provides an interface to a time.Timer which is testable.
-// See https://golang.org/pkg/time/#Timer for more details on how timers work.
-type Timer interface {
-	C() <-chan time.Time
-	Reset(d time.Duration) bool
-	Stop() bool
-	T() *time.Timer // underlying *time.Timer (nil when using a FakeClock)
 }
 
 func (rc *realClock) NewTimer(d time.Duration) Timer {
 	return &realTimer{time.NewTimer(d)}
-}
-func (rc *realClock) AfterFunc(d time.Duration, f func()) Timer {
-	return &realTimer{time.AfterFunc(d, f)}
-}
-
-type realTimer struct {
-	t *time.Timer
-}
-
-func (rt *realTimer) C() <-chan time.Time { return rt.t.C }
-func (rt *realTimer) T() *time.Timer      { return rt.t }
-func (rt *realTimer) Reset(d time.Duration) bool {
-	return rt.t.Reset(d)
-}
-func (rt *realTimer) Stop() bool {
-	return rt.t.Stop()
 }
 
 // FakeClock provides an interface for a clock which can be
@@ -87,7 +60,7 @@ func NewFakeClockAt(t time.Time) FakeClock {
 	}
 }
 
-type realClock struct{
+type realClock struct {
 	loc *time.Location
 }
 
@@ -131,38 +104,9 @@ type fakeClock struct {
 }
 
 // sleeper represents a caller of After or Sleep
-// sleeper represents a waiting timer from NewTimer, Sleep, After, etc.
 type sleeper struct {
-	until    time.Time
-	done     uint32
-	callback func(interface{}, time.Time)
-	arg      interface{}
-	ch       chan time.Time
-	fc       *fakeClock // needed for Reset()
-}
-
-func (s *sleeper) awaken(now time.Time) {
-	if atomic.CompareAndSwapUint32(&s.done, 0, 1) {
-		s.callback(s.arg, now)
-	}
-}
-func (s *sleeper) C() <-chan time.Time { return s.ch }
-func (s *sleeper) T() *time.Timer      { return nil }
-func (s *sleeper) Reset(d time.Duration) bool {
-	active := s.Stop()
-	s.until = s.fc.Now().Add(d)
-	defer s.fc.addTimer(s)
-	defer atomic.StoreUint32(&s.done, 0)
-	return active
-}
-func (s *sleeper) Stop() bool {
-	stopped := atomic.CompareAndSwapUint32(&s.done, 0, 1)
-	if stopped {
-		// Expire the timer and notify blockers
-		s.until = s.fc.Now()
-		s.fc.Advance(0)
-	}
-	return stopped
+	until time.Time
+	done  chan time.Time
 }
 
 // blocker represents a caller of BlockUntil
@@ -174,66 +118,32 @@ type blocker struct {
 // After mimics time.After; it waits for the given duration to elapse on the
 // fakeClock, then sends the current time on the returned channel.
 func (fc *fakeClock) After(d time.Duration) <-chan time.Time {
-	return fc.NewTimer(d).C()
-}
-
-// NewTimer creates a new Timer that will send the current time on its channel
-// after the given duration elapses on the fake clock.
-func (fc *fakeClock) NewTimer(d time.Duration) Timer {
-	sendTime := func(c interface{}, now time.Time) {
-		c.(chan time.Time) <- now
-	}
-	done := make(chan time.Time, 1)
-	s := &sleeper{
-		fc:       fc,
-		until:    fc.time.Add(d),
-		callback: sendTime,
-		arg:      done,
-		ch:       done,
-	}
-	fc.addTimer(s)
-	return s
-}
-
-// AfterFunc waits for the duration to elapse on the fake clock and then calls f
-// in its own goroutine.
-// It returns a Timer that can be used to cancel the call using its Stop method.
-func (fc *fakeClock) AfterFunc(d time.Duration, f func()) Timer {
-	goFunc := func(fn interface{}, _ time.Time) {
-		go fn.(func())()
-	}
-	s := &sleeper{
-		fc:       fc,
-		until:    fc.time.Add(d),
-		callback: goFunc,
-		arg:      f,
-		// zero-valued ch, the same as it is in the `time` pkg
-	}
-	fc.addTimer(s)
-	return s
-}
-
-func (fc *fakeClock) addTimer(s *sleeper) {
 	fc.l.Lock()
 	defer fc.l.Unlock()
 	now := fc.time
-	if now.Sub(s.until) >= 0 {
+	done := make(chan time.Time, 1)
+	if d.Nanoseconds() <= 0 {
 		// special case - trigger immediately
-		s.awaken(now)
+		done <- now
 	} else {
 		// otherwise, add to the set of sleepers
+		s := &sleeper{
+			until: now.Add(d),
+			done:  done,
+		}
 		fc.sleepers = append(fc.sleepers, s)
 		// and notify any blockers
 		fc.blockers = notifyBlockers(fc.blockers, len(fc.sleepers))
 	}
+	return done
 }
 
-// notifyBlockers notifies all the blockers waiting until the
-// given number of sleepers are waiting on the fakeClock. It
-// returns an updated slice of blockers (i.e. those still waiting)
+// notifyBlockers notifies all the blockers waiting until the at least the given
+// number of sleepers are waiting on the fakeClock. It returns an updated slice
+// of blockers (i.e. those still waiting)
 func notifyBlockers(blockers []*blocker, count int) (newBlockers []*blocker) {
 	for _, b := range blockers {
-		if b.count == count {
+		if b.count <= count {
 			close(b.ch)
 		} else {
 			newBlockers = append(newBlockers, b)
@@ -247,7 +157,7 @@ func (fc *fakeClock) Sleep(d time.Duration) {
 	<-fc.After(d)
 }
 
-// Time returns the current time of the fakeClock
+// Now returns the current time of the fakeClock
 func (fc *fakeClock) Now() time.Time {
 	fc.l.RLock()
 	t := fc.time
@@ -266,9 +176,14 @@ func (fc *fakeClock) Until(t time.Time) time.Duration {
 }
 
 func (fc *fakeClock) Location() *time.Location {
-	return fc.time.Location()
+	fc.l.RLock()
+	loc := fc.time.Location()
+	defer fc.l.RUnlock()
+	return loc
 }
 
+// NewTicker returns a ticker that will expire only after calls to fakeClock
+// Advance have moved the clock passed the given duration
 func (fc *fakeClock) NewTicker(d time.Duration) Ticker {
 	ft := &fakeTicker{
 		c:      make(chan time.Time, 1),
@@ -276,7 +191,26 @@ func (fc *fakeClock) NewTicker(d time.Duration) Ticker {
 		clock:  fc,
 		period: d,
 	}
-	go ft.tick()
+	ft.runTickThread()
+	return ft
+}
+
+// NewTimer returns a timer that will fire only after calls to fakeClock
+// Advance have moved the clock passed the given duration
+func (fc *fakeClock) NewTimer(d time.Duration) Timer {
+	stopped := uint32(0)
+	if d <= 0 {
+		stopped = 1
+	}
+	ft := &fakeTimer{
+		c:       make(chan time.Time, 1),
+		stop:    make(chan struct{}, 1),
+		reset:   make(chan reset, 1),
+		clock:   fc,
+		stopped: stopped,
+	}
+
+	ft.run(d)
 	return ft
 }
 
@@ -289,7 +223,7 @@ func (fc *fakeClock) Advance(d time.Duration) {
 	var newSleepers []*sleeper
 	for _, s := range fc.sleepers {
 		if end.Sub(s.until) >= 0 {
-			s.awaken(end)
+			s.done <- end
 		} else {
 			newSleepers = append(newSleepers, s)
 		}
@@ -303,12 +237,12 @@ func (fc *fakeClock) Advance(d time.Duration) {
 // (callers of Sleep or After)
 func (fc *fakeClock) BlockUntil(n int) {
 	fc.l.Lock()
-	// Fast path: current number of sleepers is what we're looking for
-	if len(fc.sleepers) == n {
+	// Fast path: we already have >= n sleepers.
+	if len(fc.sleepers) >= n {
 		fc.l.Unlock()
 		return
 	}
-	// Otherwise, set up a new blocker
+	// Otherwise, we have < n sleepers. Set up a new blocker to wait for more.
 	b := &blocker{
 		count: n,
 		ch:    make(chan struct{}),

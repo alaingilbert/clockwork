@@ -84,8 +84,13 @@ func TestNotifyBlockers(t *testing.T) {
 	b5 := &blocker{10, make(chan struct{})}
 	bs := []*blocker{b1, b2, b3, b4, b5}
 	bs1 := notifyBlockers(bs, 2)
-	if n := len(bs1); n != 4 {
-		t.Fatalf("got %d blockers, want %d", n, 4)
+	if n := len(bs1); n != 3 {
+		t.Fatalf("got %d blockers, want %d", n, 3)
+	}
+	select {
+	case <-b1.ch:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for channel close!")
 	}
 	select {
 	case <-b2.ch:
@@ -93,8 +98,13 @@ func TestNotifyBlockers(t *testing.T) {
 		t.Fatalf("timed out waiting for channel close!")
 	}
 	bs2 := notifyBlockers(bs1, 10)
-	if n := len(bs2); n != 2 {
-		t.Fatalf("got %d blockers, want %d", n, 2)
+	if n := len(bs2); n != 0 {
+		t.Fatalf("got %d blockers, want %d", n, 0)
+	}
+	select {
+	case <-b3.ch:
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for channel close!")
 	}
 	select {
 	case <-b4.ch:
@@ -148,61 +158,89 @@ func TestFakeClockUntil(t *testing.T) {
 		t.Fatalf("fakeClock.Until() returned unexpected duration, got: %d, want: %d", fc.Until(future), elapsedTime)
 	}
 }
-
 func TestFakeClockTimers(t *testing.T) {
 	fc := &fakeClock{}
+
 	zero := fc.NewTimer(0)
+
 	if zero.Stop() {
 		t.Errorf("zero timer could be stopped")
 	}
+
+	timeout := time.NewTimer(500 * time.Millisecond)
+	defer timeout.Stop()
+
 	select {
-	case <-zero.C():
-	default:
+	case <-zero.Chan():
+	case <-timeout.C:
 		t.Errorf("zero timer didn't emit time")
 	}
+
 	one := fc.NewTimer(1)
+
 	select {
-	case <-one.C():
+	case <-one.Chan():
 		t.Errorf("non-zero timer did emit time")
 	default:
 	}
 	if !one.Stop() {
 		t.Errorf("non-zero timer couldn't be stopped")
 	}
+
 	fc.Advance(5)
+
 	select {
-	case <-one.C():
+	case <-one.Chan():
 		t.Errorf("stopped timer did emit time")
 	default:
 	}
+
 	if one.Reset(1) {
 		t.Errorf("resetting stopped timer didn't return false")
 	}
 	if !one.Reset(1) {
 		t.Errorf("resetting active timer didn't return true")
 	}
+
 	fc.Advance(1)
+
+	select {
+	case <-time.After(500 * time.Millisecond):
+	}
+
 	if one.Stop() {
 		t.Errorf("triggered timer could be stopped")
 	}
+
+	timeout2 := time.NewTimer(500 * time.Millisecond)
+	defer timeout2.Stop()
+
 	select {
-	case <-one.C():
-	default:
+	case <-one.Chan():
+	case <-timeout2.C:
 		t.Errorf("triggered timer didn't emit time")
 	}
+
 	fc.Advance(1)
+
 	select {
-	case <-one.C():
+	case <-one.Chan():
 		t.Errorf("triggered timer emitted time more than once")
 	default:
 	}
+
 	one.Reset(0)
+
 	if one.Stop() {
 		t.Errorf("reset to zero timer could be stopped")
 	}
+
+	timeout3 := time.NewTimer(500 * time.Millisecond)
+	defer timeout3.Stop()
+
 	select {
-	case <-one.C():
-	default:
+	case <-one.Chan():
+	case <-timeout3.C:
 		t.Errorf("reset to zero timer didn't emit time")
 	}
 }
