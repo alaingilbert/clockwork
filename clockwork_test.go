@@ -234,3 +234,33 @@ func TestSleepNotify(t *testing.T) {
 		t.Fatalf("SleepNotify() did not call the callback")
 	}
 }
+
+func TestBlockerGetsDeleted(t *testing.T) {
+	ctx := context.Background()
+	clock := NewFakeClock()
+	ch := make(chan struct{})
+	go func() {
+		<-ch // wait until blocker is waiting
+		clock.Sleep(time.Second)
+	}()
+	_ = clock.BlockUntilContextNotify(ctx, 1, ch)
+	// If test exits everything went well, blocker got closed
+}
+
+func TestBlockerStillWaiting(t *testing.T) {
+	var calls atomic.Int32
+	ctx := context.Background()
+	clock := NewFakeClock()
+	c1 := make(chan struct{})
+	c2 := make(chan struct{})
+	go func() {
+		clock.BlockUntilContextNotify(ctx, 2, c1)
+		calls.Add(1) // Should not come here
+	}()
+	<-c1 // wait for thread to be blocking
+	go clock.SleepNotify(time.Second, c2)
+	<-c2
+	if calls.Load() == 1 {
+		t.Error("should still have 1 blocker alive")
+	}
+}

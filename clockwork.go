@@ -244,7 +244,15 @@ func (fc *FakeClock) BlockUntil(n int) {
 // BlockUntilContext blocks until the fakeClock has the given number of waiters
 // or the context is cancelled.
 func (fc *FakeClock) BlockUntilContext(ctx context.Context, n int) error {
+	return fc.BlockUntilContextNotify(ctx, n, make(chan struct{}))
+}
+
+// BlockUntilContextNotify blocks until the fakeClock has the given number of waiters
+// or the context is cancelled.
+// Notify "ch" when blockers is updated.
+func (fc *FakeClock) BlockUntilContextNotify(ctx context.Context, n int, ch chan struct{}) error {
 	b := fc.newBlocker(n)
+	close(ch)
 	if b == nil {
 		return nil
 	}
