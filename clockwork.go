@@ -245,7 +245,7 @@ func (fc *FakeClock) Advance(d time.Duration) {
 //
 // Deprecated: New code should prefer BlockUntilContext.
 func (fc *FakeClock) BlockUntil(n int) {
-	fc.BlockUntilContext(context.TODO(), n)
+	_ = fc.BlockUntilContext(context.TODO(), n)
 }
 
 // BlockUntilContext blocks until the fakeClock has the given number of waiters
@@ -303,11 +303,8 @@ func (fc *FakeClock) stopExpirer(e expirer) bool {
 	if idx == -1 {
 		return false
 	}
-	// Remove element, maintaining order, setting inaccessible elements to nil so
-	// they can be garbage collected.
-	copy(fc.waiters[idx:], fc.waiters[idx+1:])
-	fc.waiters[len(fc.waiters)-1] = nil
-	fc.waiters = fc.waiters[:len(fc.waiters)-1]
+	// Remove element, maintaining order
+	fc.waiters = slices.Delete(fc.waiters, idx, idx+1)
 	return true
 }
 
@@ -319,7 +316,7 @@ func (fc *FakeClock) setExpirer(e expirer, d time.Duration) {
 		// Special case for timers with duration <= 0: trigger immediately, never
 		// reset.
 		//
-		// Tickers never get here, they panic if d is < 0.
+		// Tickers never get here, they panic if d is <= 0.
 		e.expire(fc.time)
 		return
 	}

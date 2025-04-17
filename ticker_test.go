@@ -47,9 +47,9 @@ func TestFakeTickerTick(t *testing.T) {
 	// We wrap the Advance() calls with blockers to make sure that the ticker
 	// can go to sleep and produce ticks without time passing in parallel.
 	ft := fc.NewTicker(1)
-	fc.BlockUntil(1)
+	_ = fc.BlockUntilContext(ctx, 1)
 	fc.Advance(2)
-	fc.BlockUntil(1)
+	_ = fc.BlockUntilContext(ctx, 1)
 
 	select {
 	case tick := <-ft.Chan():
@@ -62,7 +62,7 @@ func TestFakeTickerTick(t *testing.T) {
 
 	// Advance by one more unit, we should get another tick now.
 	fc.Advance(1)
-	fc.BlockUntil(1)
+	_ = fc.BlockUntilContext(ctx, 1)
 
 	select {
 	case tick := <-ft.Chan():
@@ -122,7 +122,7 @@ func TestFakeTicker_DeliveryOrder(t *testing.T) {
 	timer := fc.NewTimer(5 * time.Second).Chan()
 	go func() {
 		for j := 0; j < 10; j++ {
-			fc.BlockUntil(1)
+			_ = fc.BlockUntilContext(ctx, 1)
 			fc.Advance(1 * time.Second)
 		}
 	}()
