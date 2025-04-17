@@ -32,6 +32,8 @@ type FakeClock interface {
 	// BlockUntil will block until the FakeClock has the given number of
 	// sleepers (callers of Sleep or After)
 	BlockUntil(n int)
+	// SleepNotify ...
+	SleepNotify(time.Duration, chan struct{})
 }
 
 // NewRealClock returns a Clock which simply delegates calls to the actual time
@@ -154,7 +156,15 @@ func notifyBlockers(blockers []*blocker, count int) (newBlockers []*blocker) {
 
 // Sleep blocks until the given duration has passed on the fakeClock
 func (fc *fakeClock) Sleep(d time.Duration) {
-	<-fc.After(d)
+	fc.SleepNotify(d, make(chan struct{}))
+}
+
+// SleepNotify blocks until the given duration has passed on the fakeClock
+// Notify ch once the sleepers has been updated
+func (fc *fakeClock) SleepNotify(d time.Duration, ch chan struct{}) {
+	done := fc.After(d)
+	close(ch)
+	<-done
 }
 
 // Now returns the current time of the fakeClock
