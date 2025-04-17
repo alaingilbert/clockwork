@@ -19,6 +19,17 @@ func TestFakeClockTimerStop(t *testing.T) {
 	}
 }
 
+func TestRealClockTimerStop(t *testing.T) {
+	t.Parallel()
+	rc := NewRealClock()
+	rt := rc.NewTimer(1)
+	rt.Stop()
+	select {
+	case <-rt.Chan():
+	default:
+	}
+}
+
 func TestFakeClockTimers(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

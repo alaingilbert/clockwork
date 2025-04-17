@@ -19,6 +19,17 @@ func TestFakeTickerStop(t *testing.T) {
 	}
 }
 
+func TestRealTickerStop(t *testing.T) {
+	t.Parallel()
+	rc := NewRealClock()
+	rt := rc.NewTicker(1)
+	rt.Stop()
+	select {
+	case <-rt.Chan():
+	default:
+	}
+}
+
 func TestFakeTickerTick(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -130,4 +141,31 @@ func TestFakeTicker_DeliveryOrder(t *testing.T) {
 			t.Fatalf("Expected ticker event didn't arrive!")
 		}
 	}
+}
+
+func TestFakeTickerPanic(t *testing.T) {
+	t.Parallel()
+	fc := &FakeClock{}
+	defer func() {
+		if r := recover(); r != nil {
+			if r.(error).Error() != "non-positive interval for NewTicker" {
+				t.Fatalf("unexpected panic message: %v", r)
+			}
+		} else {
+			t.Fatal("expected panic")
+		}
+	}()
+	fc.NewTicker(-1)
+}
+
+func TestFakeClockTicker_Race(t *testing.T) {
+	t.Parallel()
+	fc := NewFakeClock()
+	timer := fc.NewTicker(5 * time.Second)
+	for i := 0; i < 100; i++ {
+		fc.Advance(5 * time.Second)
+		<-timer.Chan()
+		timer.Reset(5 * time.Second)
+	}
+	timer.Stop()
 }

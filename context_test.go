@@ -241,3 +241,32 @@ func TestParentCancellationIsRespected(t *testing.T) {
 		})
 	}
 }
+
+func TestContextRealClock(t *testing.T) {
+	t.Parallel()
+	parentCtx := context.Background()
+	_, cancel1 := WithTimeout(parentCtx, NewRealClock(), time.Hour)
+	defer cancel1()
+	_, cancel2 := WithDeadline(parentCtx, NewRealClock(), time.Now().Add(time.Hour))
+	defer cancel2()
+}
+
+func TestContextValue(t *testing.T) {
+	parentCtx := context.WithValue(context.Background(), "key", "value")
+	ctx, cancel := WithTimeout(parentCtx, NewFakeClock(), time.Hour)
+	defer cancel()
+	if got := ctx.Value("key"); got != "value" {
+		t.Errorf("context.Value() returned %v, want: %v", got, "value")
+	}
+}
+
+func TestContextDeadline(t *testing.T) {
+	fc := NewFakeClock()
+	originalDeadline := time.Now().Add(time.Hour)
+	ctx, cancel := WithDeadline(context.Background(), fc, originalDeadline)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	if deadline != originalDeadline {
+		t.Error("invalid deadline")
+	}
+}

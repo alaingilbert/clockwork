@@ -179,6 +179,23 @@ func TestBlockUntilContext(t *testing.T) {
 	}
 }
 
+func TestBlockUntil(t *testing.T) {
+	clock := NewFakeClock()
+	var calls atomic.Int32
+	ch := make(chan struct{})
+	go func() {
+		clock.Sleep(time.Second)
+		calls.Add(1)
+		close(ch)
+	}()
+	clock.BlockUntil(1)
+	clock.Advance(time.Second)
+	<-ch
+	if calls.Load() != 1 {
+		t.Fatal("calls should be 1")
+	}
+}
+
 func TestAfterDeliveryInOrder(t *testing.T) {
 	t.Parallel()
 	fc := &FakeClock{}
@@ -210,6 +227,19 @@ func TestFakeClockRace(t *testing.T) {
 	go func() { fc.NewTicker(d) }()
 	go func() { fc.NewTimer(d) }()
 	go func() { fc.Sleep(d) }()
+}
+
+func TestRealClock(t *testing.T) {
+	t.Parallel()
+	rc := NewRealClock()
+	d := time.Second
+	go func() { rc.After(d) }()
+	go func() { rc.AfterFunc(d, func() {}) }()
+	go func() { rc.NewTicker(d) }()
+	go func() { rc.NewTimer(d) }()
+	go func() { rc.Sleep(d) }()
+	go func() { rc.Since(rc.Now().Add(-d)) }()
+	go func() { rc.Until(rc.Now().Add(d)) }()
 }
 
 func TestSleepNotify(t *testing.T) {
