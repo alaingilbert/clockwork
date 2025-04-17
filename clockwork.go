@@ -4,8 +4,8 @@ package clockwork
 import (
 	"context"
 	"errors"
+	"github.com/jonboulle/clockwork/internal/mtx"
 	"slices"
-	"sync"
 	"time"
 )
 
@@ -72,7 +72,10 @@ func (rc *realClock) AfterFunc(d time.Duration, f func()) Timer {
 type FakeClock struct {
 	// l protects all attributes of the clock, including all attributes of all
 	// waiters and blockers.
-	l        sync.RWMutex
+	inner mtx.RWMtx[fakeClockInner]
+}
+
+type fakeClockInner struct {
 	waiters  []expirer
 	blockers []*blocker
 	time     time.Time
@@ -90,7 +93,9 @@ func NewFakeClock() *FakeClock {
 // NewFakeClockAt returns a FakeClock initialised at the given time.Time.
 func NewFakeClockAt(t time.Time) *FakeClock {
 	return &FakeClock{
-		time: t,
+		inner: mtx.NewRWMtx(fakeClockInner{
+			time: t,
+		}),
 	}
 }
 
@@ -140,10 +145,9 @@ func (fc *FakeClock) SleepNotify(d time.Duration, ch chan struct{}) {
 }
 
 // Now returns the current time of the fakeClock
-func (fc *FakeClock) Now() time.Time {
-	fc.l.RLock()
-	defer fc.l.RUnlock()
-	return fc.time
+func (fc *FakeClock) Now() (out time.Time) {
+	fc.inner.RWith(func(v fakeClockInner) { out = v.time })
+	return
 }
 
 // Since returns the duration that has passed since the given time on the
@@ -169,9 +173,9 @@ func (fc *FakeClock) NewTicker(d time.Duration) Ticker {
 		panic(errors.New("non-positive interval for NewTicker"))
 	}
 	ft := newFakeTicker(fc, d)
-	fc.l.Lock()
-	defer fc.l.Unlock()
-	fc.setExpirer(ft, d)
+	fc.inner.With(func(inner *fakeClockInner) {
+		setExpirer(inner, ft, d)
+	})
 	return ft
 }
 
@@ -194,9 +198,9 @@ func (fc *FakeClock) AfterFunc(d time.Duration, f func()) Timer {
 // timer expires.
 func (fc *FakeClock) newTimer(d time.Duration, afterfunc func()) (*fakeTimer, time.Time) {
 	ft := newFakeTimer(fc, afterfunc)
-	fc.l.Lock()
-	defer fc.l.Unlock()
-	fc.setExpirer(ft, d)
+	fc.inner.With(func(inner *fakeClockInner) {
+		setExpirer(inner, ft, d)
+	})
 	return ft, ft.expiration()
 }
 
@@ -206,36 +210,36 @@ func (fc *FakeClock) newTimer(d time.Duration, afterfunc func()) (*fakeTimer, ti
 // fc.After(t.Sub(fc.Now())). It should not be exposed externally.
 func (fc *FakeClock) newTimerAtTime(t time.Time, afterfunc func()) *fakeTimer {
 	ft := newFakeTimer(fc, afterfunc)
-	fc.l.Lock()
-	defer fc.l.Unlock()
-	fc.setExpirer(ft, t.Sub(fc.time))
+	fc.inner.With(func(inner *fakeClockInner) {
+		setExpirer(inner, ft, t.Sub(inner.time))
+	})
 	return ft
 }
 
 // Advance advances fakeClock to a new point in time, ensuring waiters and
 // blockers are notified appropriately before returning.
 func (fc *FakeClock) Advance(d time.Duration) {
-	fc.l.Lock()
-	defer fc.l.Unlock()
-	end := fc.time.Add(d)
-	// Expire the earliest waiter until the earliest waiter's expiration is after
-	// end.
-	//
-	// We don't iterate because the callback of the waiter might register a new
-	// waiter, so the list of waiters might change as we execute this.
-	for len(fc.waiters) > 0 && !end.Before(fc.waiters[0].expiration()) {
-		w := fc.waiters[0]
-		fc.waiters = fc.waiters[1:]
+	fc.inner.With(func(inner *fakeClockInner) {
+		end := inner.time.Add(d)
+		// Expire the earliest waiter until the earliest waiter's expiration is after
+		// end.
+		//
+		// We don't iterate because the callback of the waiter might register a new
+		// waiter, so the list of waiters might change as we execute this.
+		for len(inner.waiters) > 0 && !end.Before(inner.waiters[0].expiration()) {
+			w := inner.waiters[0]
+			inner.waiters = inner.waiters[1:]
 
-		// Use the waiter's expiration as the current time for this expiration.
-		now := w.expiration()
-		fc.time = now
-		if d := w.expire(now); d != nil {
-			// Set the new expiration if needed.
-			fc.setExpirer(w, *d)
+			// Use the waiter's expiration as the current time for this expiration.
+			now := w.expiration()
+			inner.time = now
+			if d := w.expire(now); d != nil {
+				// Set the new expiration if needed.
+				setExpirer(inner, w, *d)
+			}
 		}
-	}
-	fc.time = end
+		inner.time = end
+	})
 }
 
 // BlockUntil blocks until the FakeClock has the given number of waiters.
@@ -272,64 +276,61 @@ func (fc *FakeClock) BlockUntilContextNotify(ctx context.Context, n int, ch chan
 	}
 }
 
-func (fc *FakeClock) newBlocker(n int) *blocker {
-	fc.l.Lock()
-	defer fc.l.Unlock()
-	// Fast path: we already have >= n waiters.
-	if len(fc.waiters) >= n {
-		return nil
-	}
-	// Set up a new blocker to wait for more waiters.
-	b := &blocker{
-		count: n,
-		ch:    make(chan struct{}),
-	}
-	fc.blockers = append(fc.blockers, b)
+func (fc *FakeClock) newBlocker(n int) (b *blocker) {
+	fc.inner.With(func(inner *fakeClockInner) {
+		// Fast path: we already have >= n waiters.
+		if len(inner.waiters) >= n {
+			return
+		}
+		// Set up a new blocker to wait for more waiters.
+		b = &blocker{
+			count: n,
+			ch:    make(chan struct{}),
+		}
+		inner.blockers = append(inner.blockers, b)
+	})
 	return b
 }
 
 // stop stops an expirer, returning true if the expirer was stopped.
-func (fc *FakeClock) stop(e expirer) bool {
-	fc.l.Lock()
-	defer fc.l.Unlock()
-	return fc.stopExpirer(e)
+func (fc *FakeClock) stop(e expirer) (stopped bool) {
+	fc.inner.With(func(inner *fakeClockInner) {
+		stopped = stopExpirer(inner, e)
+	})
+	return
 }
 
 // stopExpirer stops an expirer, returning true if the expirer was stopped.
-//
-// The caller must hold fc.l.
-func (fc *FakeClock) stopExpirer(e expirer) bool {
-	idx := slices.Index(fc.waiters, e)
+func stopExpirer(inner *fakeClockInner, e expirer) (stopped bool) {
+	idx := slices.Index(inner.waiters, e)
 	if idx == -1 {
 		return false
 	}
 	// Remove element, maintaining order
-	fc.waiters = slices.Delete(fc.waiters, idx, idx+1)
+	inner.waiters = slices.Delete(inner.waiters, idx, idx+1)
 	return true
 }
 
 // setExpirer sets an expirer to expire at a future point in time.
-//
-// The caller must hold fc.l.
-func (fc *FakeClock) setExpirer(e expirer, d time.Duration) {
+func setExpirer(inner *fakeClockInner, e expirer, d time.Duration) {
 	if d.Nanoseconds() <= 0 {
 		// Special case for timers with duration <= 0: trigger immediately, never
 		// reset.
 		//
 		// Tickers never get here, they panic if d is <= 0.
-		e.expire(fc.time)
+		e.expire(inner.time)
 		return
 	}
 	// Add the expirer to the set of waiters and notify any blockers.
-	e.setExpiration(fc.time.Add(d))
-	fc.waiters = append(fc.waiters, e)
-	slices.SortFunc(fc.waiters, func(a, b expirer) int {
+	e.setExpiration(inner.time.Add(d))
+	inner.waiters = append(inner.waiters, e)
+	slices.SortFunc(inner.waiters, func(a, b expirer) int {
 		return a.expiration().Compare(b.expiration())
 	})
 
 	// Notify blockers of our new waiter.
-	count := len(fc.waiters)
-	fc.blockers = slices.DeleteFunc(fc.blockers, func(b *blocker) bool {
+	count := len(inner.waiters)
+	inner.blockers = slices.DeleteFunc(inner.blockers, func(b *blocker) bool {
 		if b.count <= count {
 			close(b.ch)
 			return true

@@ -41,10 +41,10 @@ func newFakeTicker(fc *FakeClock, d time.Duration) *fakeTicker {
 		c: make(chan time.Time, 1),
 		d: d,
 		reset: func(d time.Duration) {
-			fc.l.Lock()
-			defer fc.l.Unlock()
-			ft.d = d
-			fc.setExpirer(ft, d)
+			fc.inner.With(func(inner *fakeClockInner) {
+				ft.d = d
+				setExpirer(inner, ft, d)
+			})
 		},
 		stop: func() { fc.stop(ft) },
 	}

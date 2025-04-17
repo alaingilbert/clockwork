@@ -39,13 +39,12 @@ func newFakeTimer(fc *FakeClock, afterfunc func()) *fakeTimer {
 	var ft *fakeTimer
 	ft = &fakeTimer{
 		c: make(chan time.Time, 1),
-		reset: func(d time.Duration) bool {
-			fc.l.Lock()
-			defer fc.l.Unlock()
-			// fc.l must be held across the calls to stopExpirer & setExpirer.
-			stopped := fc.stopExpirer(ft)
-			fc.setExpirer(ft, d)
-			return stopped
+		reset: func(d time.Duration) (stopped bool) {
+			fc.inner.With(func(inner *fakeClockInner) {
+				stopped = stopExpirer(inner, ft)
+				setExpirer(inner, ft, d)
+			})
+			return
 		},
 		stop: func() bool { return fc.stop(ft) },
 
