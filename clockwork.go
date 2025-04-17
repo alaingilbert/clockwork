@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/jonboulle/clockwork/internal/mtx"
 	"slices"
+	"sort"
 	"time"
 )
 
@@ -323,10 +324,10 @@ func setExpirer(inner *fakeClockInner, e expirer, d time.Duration) {
 	}
 	// Add the expirer to the set of waiters and notify any blockers.
 	e.setExpiration(inner.time.Add(d))
-	inner.waiters = append(inner.waiters, e)
-	slices.SortFunc(inner.waiters, func(a, b expirer) int {
-		return a.expiration().Compare(b.expiration())
+	idx := sort.Search(len(inner.waiters), func(i int) bool {
+		return inner.waiters[i].expiration().After(e.expiration())
 	})
+	inner.waiters = slices.Insert(inner.waiters, idx, e)
 
 	// Notify blockers of our new waiter.
 	count := len(inner.waiters)
