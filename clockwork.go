@@ -82,8 +82,6 @@ func (rc *realClock) AfterFunc(d time.Duration, f func()) Timer {
 // Sleep or After). Users can call BlockUntil to block until the clock has an
 // expected number of waiters.
 type FakeClock struct {
-	// l protects all attributes of the clock, including all attributes of all
-	// waiters and blockers.
 	inner mtx.RWMtx[fakeClockInner]
 }
 
@@ -114,7 +112,6 @@ func NewFakeClockAt(t time.Time) *FakeClock {
 // blocker is a caller of BlockUntil.
 type blocker struct {
 	count int
-
 	// ch is closed when the underlying clock has the specified number of blockers.
 	ch chan struct{}
 }
@@ -241,13 +238,11 @@ func (fc *FakeClock) Advance(d time.Duration) {
 		for len(inner.waiters) > 0 && !end.Before(inner.waiters[0].expiration()) {
 			w := inner.waiters[0]
 			inner.waiters = inner.waiters[1:]
-
 			// Use the waiter's expiration as the current time for this expiration.
 			now := w.expiration()
 			inner.time = now
 			if d := w.expire(now); d != nil {
-				// Set the new expiration if needed.
-				setExpirer(inner, w, *d)
+				setExpirer(inner, w, *d) // Set the new expiration if needed.
 			}
 		}
 		inner.time = end
@@ -276,32 +271,26 @@ func (fc *FakeClock) BlockUntilContext(ctx context.Context, n int) error {
 func (fc *FakeClock) BlockUntilContextNotify(ctx context.Context, n int, ch chan struct{}) error {
 	b := fc.newBlocker(n)
 	close(ch)
-	if b == nil {
-		return nil
+	if b != nil {
+		select {
+		case <-b.ch:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-
-	select {
-	case <-b.ch:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return nil
 }
 
+// Set up a new blocker to wait for more waiters.
+// Only add if we don't already have n waiters.
 func (fc *FakeClock) newBlocker(n int) (b *blocker) {
 	fc.inner.With(func(inner *fakeClockInner) {
-		// Fast path: we already have >= n waiters.
-		if len(inner.waiters) >= n {
-			return
+		if len(inner.waiters) < n {
+			b = &blocker{count: n, ch: make(chan struct{})}
+			inner.blockers = append(inner.blockers, b)
 		}
-		// Set up a new blocker to wait for more waiters.
-		b = &blocker{
-			count: n,
-			ch:    make(chan struct{}),
-		}
-		inner.blockers = append(inner.blockers, b)
 	})
-	return b
+	return
 }
 
 // stop stops an expirer, returning true if the expirer was stopped.
@@ -314,21 +303,17 @@ func (fc *FakeClock) stop(e expirer) (stopped bool) {
 
 // stopExpirer stops an expirer, returning true if the expirer was stopped.
 func stopExpirer(inner *fakeClockInner, e expirer) (stopped bool) {
-	idx := slices.Index(inner.waiters, e)
-	if idx == -1 {
-		return false
+	if idx := slices.Index(inner.waiters, e); idx != -1 {
+		inner.waiters = slices.Delete(inner.waiters, idx, idx+1)
+		stopped = true
 	}
-	// Remove element, maintaining order
-	inner.waiters = slices.Delete(inner.waiters, idx, idx+1)
-	return true
+	return
 }
 
 // setExpirer sets an expirer to expire at a future point in time.
 func setExpirer(inner *fakeClockInner, e expirer, d time.Duration) {
 	if d.Nanoseconds() <= 0 {
-		// Special case for timers with duration <= 0: trigger immediately, never
-		// reset.
-		//
+		// Special case for timers with duration <= 0: trigger immediately, never reset.
 		// Tickers never get here, they panic if d is <= 0.
 		e.expire(inner.time)
 		return

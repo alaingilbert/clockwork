@@ -13,9 +13,7 @@ type Timer interface {
 
 type realTimer struct{ *time.Timer }
 
-func (r realTimer) Chan() <-chan time.Time {
-	return r.C
-}
+func (r realTimer) Chan() <-chan time.Time { return r.C }
 
 type fakeTimer struct {
 	// The channel associated with the firer, used to send expiration times.
@@ -25,10 +23,8 @@ type fakeTimer struct {
 	// one of a FakeClock's waiters.
 	exp time.Time
 
-	// reset and stop provide the implementation of the respective exported
-	// functions.
-	reset func(d time.Duration) bool
-	stop  func() bool
+	// Fake clock
+	fc *FakeClock
 
 	// If present when the timer fires, the timer calls afterFunc in its own
 	// goroutine rather than sending the time on Chan().
@@ -36,28 +32,24 @@ type fakeTimer struct {
 }
 
 func newFakeTimer(fc *FakeClock, afterfunc func()) *fakeTimer {
-	var ft *fakeTimer
-	ft = &fakeTimer{
-		c: make(chan time.Time, 1),
-		reset: func(d time.Duration) (stopped bool) {
-			fc.inner.With(func(inner *fakeClockInner) {
-				stopped = stopExpirer(inner, ft)
-				setExpirer(inner, ft, d)
-			})
-			return
-		},
-		stop: func() bool { return fc.stop(ft) },
-
+	return &fakeTimer{
+		c:         make(chan time.Time, 1),
+		fc:        fc,
 		afterFunc: afterfunc,
 	}
-	return ft
 }
 
 func (f *fakeTimer) Chan() <-chan time.Time { return f.c }
 
-func (f *fakeTimer) Reset(d time.Duration) bool { return f.reset(d) }
+func (f *fakeTimer) Reset(d time.Duration) (stopped bool) {
+	f.fc.inner.With(func(inner *fakeClockInner) {
+		stopped = stopExpirer(inner, f)
+		setExpirer(inner, f, d)
+	})
+	return
+}
 
-func (f *fakeTimer) Stop() bool { return f.stop() }
+func (f *fakeTimer) Stop() bool { return f.fc.stop(f) }
 
 func (f *fakeTimer) expire(now time.Time) *time.Duration {
 	if f.afterFunc != nil {
