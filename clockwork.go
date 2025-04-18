@@ -29,7 +29,14 @@ func NewRealClock() Clock {
 	return &realClock{}
 }
 
-type realClock struct{}
+type realClock struct {
+	loc *time.Location
+}
+
+// NewRealClockInLocation ...
+func NewRealClockInLocation(location *time.Location) Clock {
+	return &realClock{loc: location}
+}
 
 func (rc *realClock) After(d time.Duration) <-chan time.Time {
 	return time.After(d)
@@ -39,8 +46,12 @@ func (rc *realClock) Sleep(d time.Duration) {
 	time.Sleep(d)
 }
 
-func (rc *realClock) Now() time.Time {
-	return time.Now()
+func (rc *realClock) Now() (out time.Time) {
+	out = time.Now()
+	if rc.loc != nil {
+		out = out.In(rc.loc)
+	}
+	return
 }
 
 func (rc *realClock) Since(t time.Time) time.Duration {
