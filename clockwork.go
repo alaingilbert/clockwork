@@ -116,7 +116,14 @@ type expirer interface {
 // After mimics [time.After]; it waits for the given duration to elapse on the
 // fakeClock, then sends the current time on the returned channel.
 func (fc *FakeClock) After(d time.Duration) <-chan time.Time {
-	return fc.NewTimer(d).Chan()
+	return fc.AfterNotify(d, make(chan struct{}))
+}
+
+// AfterNotify notifies when the waiters has been updated.
+func (fc *FakeClock) AfterNotify(d time.Duration, ch chan struct{}) <-chan time.Time {
+	c := fc.NewTimer(d).Chan()
+	close(ch)
+	return c
 }
 
 // Sleep blocks until the given duration has passed on the fakeClock.
